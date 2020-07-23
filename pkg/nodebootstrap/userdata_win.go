@@ -11,22 +11,34 @@ import (
 
 func NewUserDataForWindows(spec *api.ClusterConfig, ng *api.NodeGroup) (string, error) {
 	bootstrapScript := `<powershell>
-[string]$EKSBootstrapScriptFile = "$env:ProgramFiles\Amazon\EKS\Start-EKSBootstrap.ps1"
 `
-	for _, command := range ng.PreBootstrapCommands {
-		bootstrapScript += fmt.Sprintf("%s\n", command)
-	}
 
-	kubeletOptions := map[string]string{
-		"node-labels":          kvs(ng.Labels),
-		"register-with-taints": kvs(ng.Taints),
-	}
-	if ng.MaxPodsPerNode != 0 {
-		kubeletOptions["max-pods"] = strconv.Itoa(ng.MaxPodsPerNode)
-	}
+	// If we have an override bootstrap command defined for this nodegroup,
+	// stick just that line into the bootstrap script and call it a day.
+	if ng.OverrideBootstrapCommand != nil {
+		bootstrapScript += fmt.Sprintf("%s\n", *ng.OverrideBootstrapCommand)
+		bootstrapScript += `</powershell>`
+	} else {
+		// Otherwise, we process any preBootstrapCommands and call the EKS
+		// bootstrap script as the default.
+		bootstrapScript += `[string]$EKSBootstrapScriptFile = "$env:ProgramFiles\Amazon\EKS\Start-EKSBootstrap.ps1"
+`
+		for _, command := range ng.PreBootstrapCommands {
+			bootstrapScript += fmt.Sprintf("%s\n", command)
+		}
 
-	kubeletArgs := toCLIArgs(kubeletOptions)
-	bootstrapScript += fmt.Sprintf("& $EKSBootstrapScriptFile -EKSClusterName %q -KubeletExtraArgs %q 3>&1 4>&1 5>&1 6>&1\n</powershell>", spec.Metadata.Name, kubeletArgs)
+		kubeletOptions := map[string]string{
+			"node-labels":          kvs(ng.Labels),
+			"register-with-taints": kvs(ng.Taints),
+		}
+		if ng.MaxPodsPerNode != 0 {
+			kubeletOptions["max-pods"] = strconv.Itoa(ng.MaxPodsPerNode)
+		}
+
+		kubeletArgs := toCLIArgs(kubeletOptions)
+		bootstrapScript += fmt.Sprintf("& $EKSBootstrapScriptFile -EKSClusterName %q -KubeletExtraArgs %q 3>&1 4>&1 5>&1 6>&1\n</powershell>", spec.Metadata.Name, kubeletArgs)
+
+	}
 
 	userData := base64.StdEncoding.EncodeToString([]byte(bootstrapScript))
 
